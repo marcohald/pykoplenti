@@ -131,7 +131,9 @@ class ApiClient(contextlib.AbstractAsyncContextManager):
     this state some operation might not be available.
     """
 
-    BASE_URL = "/api/v1/"
+    API_V1_BASE = "/api/v1/"
+    API_V2_BASE = "/api/v2/"
+    BASE_URL = API_V1_BASE
     SUPPORTED_LANGUAGES = {
         "de": ["de"],
         "en": ["gb"],
@@ -161,10 +163,12 @@ class ApiClient(contextlib.AbstractAsyncContextManager):
         self._key: Union[str, None] = None
         self._service_code: Union[str, None] = None
         self._user: Union[str, None] = None
+        self._token: Union[str, None] = None
+        self._api_version: Union[str, None] = None
 
     async def __aexit__(self, exc_type, exc_value, traceback):
         """Logout support for context manager."""
-        if self.session_id is not None:
+        if self.session_id is not None or self._token is not None:
             await self.logout()
 
     def _create_url(self, path: str) -> URL:
@@ -173,11 +177,12 @@ class ApiClient(contextlib.AbstractAsyncContextManager):
         :param path: path suffix, must not start with '/'
         :return: a URL instance
         """
+        base_path = self.API_V2_BASE if self._api_version == "v2" else self.API_V1_BASE
         base = URL.build(
             scheme="http",
             host=self.host,
             port=self.port,
-            path=ApiClient.BASE_URL,
+            path=base_path,
         )
         return base.join(URL(path))
 
@@ -228,6 +233,23 @@ class ApiClient(contextlib.AbstractAsyncContextManager):
             )
 
         self._service_code = service_code
+
+        # Autosensing API version
+        if self._api_version is None:
+            try:
+                url = URL.build(
+                    scheme="http",
+                    host=self.host,
+                    port=self.port,
+                    path=self.API_V2_BASE,
+                ).join(URL("info/version"))
+                async with self.websession.get(url, timeout=ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        self._api_version = "v2"
+                    else:
+                        self._api_version = "v1"
+            except Exception:
+                self._api_version = "v1"
 
         try:
             await self._login()
@@ -334,7 +356,11 @@ class ApiClient(contextlib.AbstractAsyncContextManager):
         ) as resp:
             await self._check_response(resp)
             session_response = await resp.json()
-            self.session_id = session_response["sessionId"]
+
+            if self._api_version == "v2":
+                 self._token = session_response["token"]
+            else:
+                 self.session_id = session_response["sessionId"]
 
     def _session_request(self, path: str, method="GET", **kwargs):
         """Make an request on the current active session.
@@ -345,7 +371,9 @@ class ApiClient(contextlib.AbstractAsyncContextManager):
         """
 
         headers: Dict[str, str] = {}
-        if self.session_id is not None:
+        if self._api_version == "v2" and self._token is not None:
+             headers["authorization"] = f"Bearer {self._token}"
+        elif self.session_id is not None:
             headers["authorization"] = f"Session {self.session_id}"
 
         return self.websession.request(
@@ -387,8 +415,13 @@ class ApiClient(contextlib.AbstractAsyncContextManager):
         """Logs the current user out."""
         self._key = None
         self._service_code = None
-        async with self._session_request("auth/logout", method="POST") as resp:
-            await self._check_response(resp)
+
+        try:
+             async with self._session_request("auth/logout", method="POST") as resp:
+                await self._check_response(resp)
+        finally:
+             self.session_id = None
+             self._token = None
 
     async def get_me(self) -> MeData:
         """Returns information about the user.
