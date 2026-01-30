@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Final, Iterator, Mapping, Optional
+from typing import Any, Dict, Final, Iterator, Mapping, Optional, Union
 
 import pydantic
 from pydantic import BaseModel, Field
@@ -36,7 +36,7 @@ class ProcessData(BaseModel):
     """Represents a single process data."""
 
     id: str
-    unit: str
+    unit: Optional[str] = None
     value: float
 
 
@@ -81,10 +81,10 @@ class SettingsData(BaseModel):
     min: Optional[str]
     max: Optional[str]
     default: Optional[str]
-    access: str
+    access: Union[str, Dict[str, Any]]
     unit: Optional[str]
     id: str
-    type: str
+    type: Union[str, Dict[str, Any]]
 
 
 class EventData(BaseModel):
